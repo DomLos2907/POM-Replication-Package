@@ -1,0 +1,15 @@
+# Local R/session artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# Generated output
+figures/*.png
+figures/*.pdf
+tables/*.tex
+
+# Raw data is excluded by default. Remove these lines only if the data should be public.
+data/raw/*.xlsx
+data/raw/*.xls
+data/raw/*.csv
+
