@@ -1,14 +1,22 @@
 ## Appendix A.1: Run-Level Profit Model Diagnostics ---------------------------
 ## Standalone script for reproducing Appendix A.1.
+## Reference category: rule-based architecture
 
 library(readxl)
 library(lme4)
 library(lmerTest)
 
-## Import data
-runlevel <- read_excel("C:/Users/loske/Desktop/POM_RunLevel_Dataset.xlsx")
+## Import data ----------------------------------------------------------------
+project_data_path <- "data/raw/POM_RunLevel_Dataset.xlsx"
+desktop_data_path <- "C:/Users/loske/Desktop/POM_RunLevel_Dataset.xlsx"
 
-## Variable preparation
+if (file.exists(project_data_path)) {
+  runlevel <- read_excel(project_data_path)
+} else {
+  runlevel <- read_excel(desktop_data_path)
+}
+
+## Variable preparation -------------------------------------------------------
 runlevel$total_profit_mio <- runlevel$total_profit / 1000000
 
 runlevel$architecture <- factor(runlevel$architecture)
@@ -16,7 +24,13 @@ runlevel$demand_volatility <- factor(runlevel$demand_volatility)
 runlevel$market_noise <- factor(runlevel$market_noise)
 runlevel$replication <- factor(runlevel$replication)
 
-## Models
+## Main change: rule-based architecture is the omitted reference category
+runlevel$architecture <- relevel(runlevel$architecture, ref = "rule_based")
+runlevel$demand_volatility <- relevel(runlevel$demand_volatility, ref = "0.1")
+runlevel$market_noise <- relevel(runlevel$market_noise, ref = "0.03")
+
+## Models ---------------------------------------------------------------------
+
 model_A1_lm <- lm(
   total_profit_mio ~ architecture + demand_volatility + market_noise,
   data = runlevel
@@ -28,13 +42,21 @@ model_A1_lmer <- lmer(
   REML = FALSE
 )
 
-## Random-effect variance
+summary(model_A1_lm)
+summary(model_A1_lmer)
+
+## Random-effect variance -----------------------------------------------------
+
 replication_variance <- as.data.frame(VarCorr(model_A1_lmer))$vcov[1]
 
 ## Q-Q plots for appendix, saved to Desktop as PNG ----------------------------
 
-png("C:/Users/loske/Desktop/Appendix_A1_QQ_Linear_Model.png",
-    width = 1600, height = 1100, res = 200)
+png(
+  "C:/Users/loske/Desktop/Appendix_A1_QQ_Linear_Model.png",
+  width = 1600,
+  height = 1100,
+  res = 200
+)
 qqnorm(
   resid(model_A1_lm),
   main = "Normal Q-Q Plot: Linear Model"
@@ -42,8 +64,12 @@ qqnorm(
 qqline(resid(model_A1_lm), col = "red")
 dev.off()
 
-png("C:/Users/loske/Desktop/Appendix_A1_QQ_Mixed_Effects_Model.png",
-    width = 1600, height = 1100, res = 200)
+png(
+  "C:/Users/loske/Desktop/Appendix_A1_QQ_Mixed_Effects_Model.png",
+  width = 1600,
+  height = 1100,
+  res = 200
+)
 qqnorm(
   resid(model_A1_lmer),
   main = "Normal Q-Q Plot: Mixed-Effects Model"
@@ -71,10 +97,10 @@ extract_model <- function(model) {
   coefs <- as.data.frame(summary(model)$coefficients)
   coefs$term <- rownames(coefs)
   rownames(coefs) <- NULL
-
+  
   p_col <- grep("Pr", names(coefs), value = TRUE)
   stat_col <- grep("t value", names(coefs), value = TRUE)
-
+  
   data.frame(
     term = coefs$term,
     estimate = fmt_num(coefs$Estimate),
@@ -93,8 +119,8 @@ lmer_tab <- extract_model(model_A1_lmer)
 
 labels <- c(
   "(Intercept)" = "Constant",
+  "architecturecentralized" = "Centralized architecture",
   "architectureindependent" = "Independent architecture",
-  "architecturerule_based" = "Rule-based architecture",
   "architecturesequential" = "Sequential architecture",
   "architecturesupervised" = "Supervised architecture",
   "demand_volatility0.25" = "High demand volatility",
@@ -166,7 +192,7 @@ latex_lines <- c(
     "} \\\\"
   ),
   "\\hline\\hline",
-  "\\multicolumn{9}{l}{\\footnotesize Reference categories: centralized architecture, low demand volatility, and low market noise.} \\\\",
+  "\\multicolumn{9}{l}{\\footnotesize Reference categories: rule-based architecture, low demand volatility, and low market noise.} \\\\",
   "\\end{tabular}%",
   "}",
   "\\end{table}"
@@ -175,4 +201,3 @@ latex_lines <- c(
 ## Print LaTeX code to console ------------------------------------------------
 
 cat(paste(latex_lines, collapse = "\n"))
-
