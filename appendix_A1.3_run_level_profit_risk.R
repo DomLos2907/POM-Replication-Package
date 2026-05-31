@@ -1,4 +1,5 @@
 ## Downside Profit Risk Model -------------------------------------------------
+## Reference category: rule-based architecture
 
 ## 1. Packages ----------------------------------------------------------------
 library(readxl)
@@ -8,10 +9,20 @@ library(ggplot2)
 library(logistf)
 
 ## 2. Import period-level data ------------------------------------------------
-periodlevel <- read_excel(
-  "C:/Users/loske/Desktop/POM_Experiment_Data Kopie.xlsx",
-  sheet = "Period-Level"
-)
+project_data_path <- "data/raw/POM_Experiment_Data Kopie.xlsx"
+desktop_data_path <- "C:/Users/loske/Desktop/POM_Experiment_Data Kopie.xlsx"
+
+if (file.exists(project_data_path)) {
+  periodlevel <- read_excel(
+    project_data_path,
+    sheet = "Period-Level"
+  )
+} else {
+  periodlevel <- read_excel(
+    desktop_data_path,
+    sheet = "Period-Level"
+  )
+}
 
 ## 3. Variable preparation ----------------------------------------------------
 periodlevel$period_profit_mio <- periodlevel$period_profit / 1000000
@@ -21,7 +32,8 @@ periodlevel$demand_volatility <- factor(periodlevel$demand_volatility)
 periodlevel$market_noise <- factor(periodlevel$market_noise)
 periodlevel$replication <- factor(periodlevel$replication)
 
-periodlevel$architecture <- relevel(periodlevel$architecture, ref = "centralized")
+## Main change: rule-based architecture is now the omitted reference category
+periodlevel$architecture <- relevel(periodlevel$architecture, ref = "rule_based")
 periodlevel$demand_volatility <- relevel(periodlevel$demand_volatility, ref = "0.1")
 periodlevel$market_noise <- relevel(periodlevel$market_noise, ref = "0.03")
 
@@ -45,7 +57,7 @@ run_downside_zero$architecture <- factor(run_downside_zero$architecture)
 run_downside_zero$demand_volatility <- factor(run_downside_zero$demand_volatility)
 run_downside_zero$market_noise <- factor(run_downside_zero$market_noise)
 
-run_downside_zero$architecture <- relevel(run_downside_zero$architecture, ref = "centralized")
+run_downside_zero$architecture <- relevel(run_downside_zero$architecture, ref = "rule_based")
 run_downside_zero$demand_volatility <- relevel(run_downside_zero$demand_volatility, ref = "0.1")
 run_downside_zero$market_noise <- relevel(run_downside_zero$market_noise, ref = "0.03")
 
@@ -104,9 +116,12 @@ model_downside_occurrence_firth <- logistf(
 summary(model_downside_occurrence_firth)
 
 ## Part 2: Severity of downside risk, conditional on downside risk occurring
+downside_severity_data <- subset(run_downside_zero, downside_risk_zero > 0)
+downside_severity_data <- droplevels(downside_severity_data)
+
 model_downside_severity <- lmrob(
   log(downside_risk_zero) ~ architecture + demand_volatility + market_noise,
-  data = subset(run_downside_zero, downside_risk_zero > 0)
+  data = downside_severity_data
 )
 
 summary(model_downside_severity)
@@ -151,8 +166,8 @@ tab_model(
   ),
   pred.labels = c(
     "Constant",
+    "Centralized architecture",
     "Independent architecture",
-    "Rule-based architecture",
     "Sequential architecture",
     "Supervised architecture",
     "High demand volatility",
@@ -236,8 +251,8 @@ rownames(severity_coef) <- NULL
 
 labels <- c(
   "(Intercept)" = "Constant",
+  "architecturecentralized" = "Centralized architecture",
   "architectureindependent" = "Independent architecture",
-  "architecturerule_based" = "Rule-based architecture",
   "architecturesequential" = "Sequential architecture",
   "architecturesupervised" = "Supervised architecture",
   "demand_volatility0.25" = "High demand volatility",
@@ -307,7 +322,7 @@ latex_downside <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} The analysis is conducted at the simulation-run level. Downside profit risk is measured as the root mean squared shortfall of period profit below zero within each simulation run. The first model estimates whether a run experiences any downside risk using Firth logistic regression. The second model estimates downside risk severity conditional on downside risk occurring, using robust linear regression with log-transformed downside risk as the dependent variable. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\textbf{Note.} The analysis is conducted at the simulation-run level. Downside profit risk is measured as the root mean squared shortfall of period profit below zero within each simulation run. The first model estimates whether a run experiences any downside risk using Firth logistic regression. The second model estimates downside risk severity conditional on downside risk occurring, using robust linear regression with log-transformed downside risk as the dependent variable. Rule-based architecture, low demand volatility, and low market noise are omitted reference categories. Positive architecture coefficients indicate higher downside-risk occurrence or severity relative to rule-based architecture.",
   "\\end{minipage}",
   "\\end{table}"
 )
