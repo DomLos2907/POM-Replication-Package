@@ -1,4 +1,5 @@
 ## Robustness Check: Alternative Downside-Risk Thresholds ----------------------
+## Reference category: rule-based architecture
 
 ## 1. Packages ----------------------------------------------------------------
 library(readxl)
@@ -6,10 +7,20 @@ library(logistf)
 library(robustbase)
 
 ## 2. Import period-level data ------------------------------------------------
-periodlevel <- read_excel(
-  "C:/Users/loske/Desktop/POM_Experiment_Data Kopie.xlsx",
-  sheet = "Period-Level"
-)
+project_data_path <- "data/raw/POM_Experiment_Data Kopie.xlsx"
+desktop_data_path <- "C:/Users/loske/Desktop/POM_Experiment_Data Kopie.xlsx"
+
+if (file.exists(project_data_path)) {
+  periodlevel <- read_excel(
+    project_data_path,
+    sheet = "Period-Level"
+  )
+} else {
+  periodlevel <- read_excel(
+    desktop_data_path,
+    sheet = "Period-Level"
+  )
+}
 
 ## 3. Variable preparation ----------------------------------------------------
 periodlevel$period_profit_mio <- periodlevel$period_profit / 1000000
@@ -19,7 +30,7 @@ periodlevel$demand_volatility <- factor(periodlevel$demand_volatility)
 periodlevel$market_noise <- factor(periodlevel$market_noise)
 periodlevel$replication <- factor(periodlevel$replication)
 
-periodlevel$architecture <- relevel(periodlevel$architecture, ref = "centralized")
+periodlevel$architecture <- relevel(periodlevel$architecture, ref = "rule_based")
 periodlevel$demand_volatility <- relevel(periodlevel$demand_volatility, ref = "0.1")
 periodlevel$market_noise <- relevel(periodlevel$market_noise, ref = "0.03")
 
@@ -58,7 +69,7 @@ build_downside_data <- function(data, tau) {
   
   downside_data$architecture <- relevel(
     downside_data$architecture,
-    ref = "centralized"
+    ref = "rule_based"
   )
   downside_data$demand_volatility <- relevel(
     downside_data$demand_volatility,
@@ -92,14 +103,18 @@ for (threshold_name in names(thresholds)) {
     data = downside_data
   )
   
+  severity_data <- subset(downside_data, downside_risk > 0)
+  severity_data <- droplevels(severity_data)
+  
   severity_model <- lmrob(
     log(downside_risk) ~ architecture + demand_volatility + market_noise,
-    data = subset(downside_data, downside_risk > 0)
+    data = severity_data
   )
   
   model_results[[threshold_name]] <- list(
     tau = tau,
     data = downside_data,
+    severity_data = severity_data,
     occurrence_model = occurrence_model,
     severity_model = severity_model
   )
@@ -180,8 +195,8 @@ extract_lmrob <- function(model) {
 
 labels <- c(
   "(Intercept)" = "Intercept",
+  "architecturecentralized" = "Centralized architecture",
   "architectureindependent" = "Independent architecture",
-  "architecturerule_based" = "Rule-based architecture",
   "architecturesequential" = "Sequential architecture",
   "architecturesupervised" = "Supervised architecture",
   "demand_volatility0.25" = "High demand volatility",
@@ -278,7 +293,7 @@ latex_occurrence <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $z$ denotes the z-statistic, and $p$ denotes the p-value. The dependent variable equals one if the run-level downside-risk measure is greater than zero. Models are estimated using Firth logistic regression. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $z$ denotes the z-statistic, and $p$ denotes the p-value. The dependent variable equals one if the run-level downside-risk measure is greater than zero. Models are estimated using Firth logistic regression. Rule-based architecture, low demand volatility, and low market noise are omitted reference categories. Positive architecture coefficients indicate higher downside-risk occurrence relative to rule-based architecture.",
   "\\end{minipage}",
   "\\end{table}"
 )
@@ -377,7 +392,7 @@ latex_severity <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The dependent variable is the log-transformed downside-risk measure, conditional on downside risk being greater than zero. Models are estimated using robust linear regression via \\texttt{lmrob}. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The dependent variable is the log-transformed downside-risk measure, conditional on downside risk being greater than zero. Models are estimated using robust linear regression via \\texttt{lmrob}. Rule-based architecture, low demand volatility, and low market noise are omitted reference categories. Positive architecture coefficients indicate higher downside-risk severity relative to rule-based architecture.",
   "\\end{minipage}",
   "\\end{table}"
 )
