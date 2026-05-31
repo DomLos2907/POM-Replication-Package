@@ -1,4 +1,4 @@
-## Two-Part Service Shortfall Models ------------------------------------------
+## Service Quality Models: Average Service Level and 97.5% Shortfall -----------
 
 ## 1. Packages ----------------------------------------------------------------
 library(readxl)
@@ -24,21 +24,34 @@ runlevel$architecture <- relevel(runlevel$architecture, ref = "centralized")
 runlevel$demand_volatility <- relevel(runlevel$demand_volatility, ref = "0.1")
 runlevel$market_noise <- relevel(runlevel$market_noise, ref = "0.03")
 
-## 4. Inspect service-level distribution --------------------------------------
+## 4. Diagnostic checks -------------------------------------------------------
 
 summary(runlevel$avg_service_level)
 
+## 100% target diagnostic only
 table(runlevel$avg_service_level == 1)
-table(runlevel$avg_service_level < 0.975)
 
-with(
-  runlevel,
-  table(architecture, avg_service_level == 1)
+## Company-relevant service target
+service_target <- 0.975
+
+runlevel$service_shortfall <- pmax(
+  service_target - runlevel$avg_service_level,
+  0
 )
 
+runlevel$service_shortfall[
+  runlevel$service_shortfall < 1e-10
+] <- 0
+
+runlevel$has_service_shortfall <- as.integer(
+  runlevel$service_shortfall > 0
+)
+
+table(runlevel$has_service_shortfall)
+
 with(
   runlevel,
-  table(architecture, avg_service_level < 0.975)
+  table(architecture, has_service_shortfall)
 )
 
 hist(
@@ -51,124 +64,65 @@ hist(
   border = "white"
 )
 
-## 5. Define service targets --------------------------------------------------
+## 5. Main average service-level model ----------------------------------------
+## Fractional logit model for bounded service-level outcome
 
-service_targets <- list(
-  "100% service target" = 1.000,
-  "97.5% service target" = 0.975
+model_service_fractional <- glm(
+  avg_service_level ~ architecture + demand_volatility + market_noise,
+  data = runlevel,
+  family = quasibinomial(link = "logit")
 )
 
-## 6. Helper function: build service shortfall data ---------------------------
+summary(model_service_fractional)
 
-build_service_shortfall_data <- function(data, target) {
-  
-  service_data <- data
-  
-  service_data$service_target <- target
-  
-  service_data$service_shortfall <- pmax(
-    target - service_data$avg_service_level,
-    0
-  )
-  
-  ## Avoid treating numerical rounding noise as a shortfall
-  service_data$service_shortfall[
-    service_data$service_shortfall < 1e-10
-  ] <- 0
-  
-  service_data$has_service_shortfall <- service_data$service_shortfall > 0
-  
-  service_data
-}
+## 6. Target-based two-part service shortfall model ---------------------------
 
-## 7. Estimate two-part models for both targets -------------------------------
+## Stage 1: Does the run fall below the 97.5% target?
+model_service_shortfall_occurrence <- logistf(
+  has_service_shortfall ~ architecture + demand_volatility + market_noise,
+  data = runlevel
+)
 
-service_results <- list()
+summary(model_service_shortfall_occurrence)
 
-for (target_name in names(service_targets)) {
-  
-  target <- service_targets[[target_name]]
-  
-  service_data <- build_service_shortfall_data(
-    data = runlevel,
-    target = target
-  )
-  
-  ## Stage 1: Does the run fall below the service target?
-  occurrence_model <- logistf(
-    has_service_shortfall ~ architecture + demand_volatility + market_noise,
-    data = service_data
-  )
-  
-  ## Stage 2: How large is the shortfall, conditional on shortfall occurring?
-  severity_model <- lmrob(
-    log(service_shortfall) ~ architecture + demand_volatility + market_noise,
-    data = subset(service_data, service_shortfall > 0)
-  )
-  
-  service_results[[target_name]] <- list(
-    target = target,
-    data = service_data,
-    occurrence_model = occurrence_model,
-    severity_model = severity_model
-  )
-}
+## Stage 2: How large is the shortfall, conditional on falling below 97.5%?
+service_severity_data <- subset(runlevel, service_shortfall > 0)
+service_severity_data <- droplevels(service_severity_data)
 
-## 8. Summary of observations -------------------------------------------------
+model_service_shortfall_severity <- lmrob(
+  log(service_shortfall) ~ architecture + demand_volatility + market_noise,
+  data = service_severity_data
+)
 
-service_threshold_summary <- data.frame(
-  target = names(service_results),
-  target_value = sapply(service_results, function(x) x$target),
-  observations_stage_1 = sapply(service_results, function(x) nrow(x$data)),
-  observations_stage_2 = sapply(
-    service_results,
-    function(x) sum(x$data$service_shortfall > 0)
+summary(model_service_shortfall_severity)
+
+## 7. Descriptive shortfall table ---------------------------------------------
+
+service_counts <- data.frame(
+  architecture = levels(runlevel$architecture),
+  no_shortfall = as.vector(
+    tapply(runlevel$has_service_shortfall == 0, runlevel$architecture, sum)
   ),
-  runs_without_shortfall = sapply(
-    service_results,
-    function(x) sum(x$data$service_shortfall == 0)
+  shortfall = as.vector(
+    tapply(runlevel$has_service_shortfall == 1, runlevel$architecture, sum)
+  ),
+  shortfall_rate = as.vector(
+    tapply(runlevel$has_service_shortfall == 1, runlevel$architecture, mean)
   )
 )
 
-service_threshold_summary
+service_counts
 
-## 9. Descriptive counts by architecture --------------------------------------
-
-make_count_summary <- function(service_data) {
-  data.frame(
-    architecture = levels(service_data$architecture),
-    no_shortfall = as.vector(
-      tapply(!service_data$has_service_shortfall, service_data$architecture, sum)
-    ),
-    shortfall = as.vector(
-      tapply(service_data$has_service_shortfall, service_data$architecture, sum)
-    ),
-    shortfall_rate = as.vector(
-      tapply(service_data$has_service_shortfall, service_data$architecture, mean)
-    )
-  )
-}
-
-counts_100 <- make_count_summary(service_results[[1]]$data)
-counts_975 <- make_count_summary(service_results[[2]]$data)
-
-counts_100
-counts_975
-
-## 10. Formatting helpers -----------------------------------------------------
+## 8. Formatting helpers ------------------------------------------------------
 
 fmt_num <- function(x) {
-  ifelse(
-    is.na(x),
-    "",
-    sprintf("%.2f", x)
-  )
+  ifelse(is.na(x), "--", sprintf("%.2f", x))
 }
 
 fmt_p <- function(p) {
   ifelse(
     is.na(p),
-    "",
+    "--",
     ifelse(
       p < 0.001,
       "$<$0.001",
@@ -181,7 +135,21 @@ fmt_pct <- function(x) {
   paste0(sprintf("%.1f", 100 * x), "\\%")
 }
 
-## 11. Extract Firth logistic model results -----------------------------------
+## 9. Extraction helpers ------------------------------------------------------
+
+extract_glm <- function(model) {
+  coef_tab <- as.data.frame(summary(model)$coefficients)
+  coef_tab$term <- rownames(coef_tab)
+  rownames(coef_tab) <- NULL
+  
+  data.frame(
+    term = coef_tab$term,
+    estimate = coef_tab$Estimate,
+    se = coef_tab$`Std. Error`,
+    statistic = coef_tab$`t value`,
+    p = coef_tab$`Pr(>|t|)`
+  )
+}
 
 extract_firth <- function(model) {
   coef_tab <- data.frame(
@@ -196,8 +164,6 @@ extract_firth <- function(model) {
   coef_tab
 }
 
-## 12. Extract robust severity model results ----------------------------------
-
 extract_lmrob <- function(model) {
   coef_tab <- as.data.frame(summary(model)$coefficients)
   coef_tab$term <- rownames(coef_tab)
@@ -211,8 +177,6 @@ extract_lmrob <- function(model) {
     p = coef_tab$`Pr(>|t|)`
   )
 }
-
-## 13. Paper-ready labels -----------------------------------------------------
 
 labels <- c(
   "(Intercept)" = "Intercept",
@@ -234,34 +198,85 @@ get_value <- function(tab, term, column) {
   value
 }
 
-## 14. LaTeX table: service shortfall counts ----------------------------------
+## 10. LaTeX table: average service-level model -------------------------------
+
+service_avg_tab <- extract_glm(model_service_fractional)
+
+latex_service_avg <- c(
+  "\\begin{table}[!htbp]",
+  "\\centering",
+  "\\scriptsize",
+  "\\caption{Decision-Making Architecture and Average Service Level}",
+  "\\label{tab:service_fractional_logit}",
+  "\\begin{tabular}{lcccc}",
+  "\\hline\\hline",
+  "Predictors & Est. & SE & $t$ & $p$ \\\\",
+  "\\hline"
+)
+
+for (term in terms) {
+  latex_service_avg <- c(
+    latex_service_avg,
+    paste0(
+      labels[term], " & ",
+      fmt_num(get_value(service_avg_tab, term, "estimate")), " & ",
+      fmt_num(get_value(service_avg_tab, term, "se")), " & ",
+      fmt_num(get_value(service_avg_tab, term, "statistic")), " & ",
+      fmt_p(get_value(service_avg_tab, term, "p")),
+      " \\\\"
+    )
+  )
+}
+
+latex_service_avg <- c(
+  latex_service_avg,
+  "\\hline",
+  paste0("Observations & \\multicolumn{4}{c}{", nobs(model_service_fractional), "} \\\\"),
+  "\\hline\\hline",
+  "\\end{tabular}",
+  "\\vspace{0.15cm}",
+  "\\begin{minipage}{0.82\\textwidth}",
+  "\\footnotesize",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The dependent variable is average service level. The model is estimated as a fractional logit model using a quasibinomial logit link. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\end{minipage}",
+  "\\end{table}"
+)
+
+cat(paste(latex_service_avg, collapse = "\n"))
+cat("\n\n")
+
+## 11. LaTeX table: 97.5% shortfall counts ------------------------------------
+
+architecture_labels <- c(
+  "centralized" = "Centralized",
+  "independent" = "Independent",
+  "rule_based" = "Rule-based",
+  "sequential" = "Sequential",
+  "supervised" = "Supervised"
+)
 
 latex_counts <- c(
   "\\begin{table}[!htbp]",
   "\\centering",
   "\\scriptsize",
   "\\caption{Service Shortfall Occurrence by Decision-Making Architecture}",
-  "\\label{tab:service_shortfall_counts}",
-  "\\resizebox{\\textwidth}{!}{%",
-  "\\begin{tabular}{lcccccc}",
+  "\\label{tab:service_shortfall_counts_975}",
+  "\\begin{tabular}{lccc}",
   "\\hline\\hline",
-  " & \\multicolumn{3}{c}{100\\% service target} & \\multicolumn{3}{c}{97.5\\% service target} \\\\",
-  "\\cline{2-4} \\cline{5-7}",
-  "Architecture & No shortfall & Shortfall & Shortfall rate & No shortfall & Shortfall & Shortfall rate \\\\",
+  "Architecture & No shortfall & Shortfall & Shortfall rate \\\\",
   "\\hline"
 )
 
-for (i in seq_len(nrow(counts_100))) {
+for (i in seq_len(nrow(service_counts))) {
+  arch <- as.character(service_counts$architecture[i])
+  
   latex_counts <- c(
     latex_counts,
     paste0(
-      counts_100$architecture[i], " & ",
-      counts_100$no_shortfall[i], " & ",
-      counts_100$shortfall[i], " & ",
-      fmt_pct(counts_100$shortfall_rate[i]), " & ",
-      counts_975$no_shortfall[i], " & ",
-      counts_975$shortfall[i], " & ",
-      fmt_pct(counts_975$shortfall_rate[i]),
+      architecture_labels[arch], " & ",
+      service_counts$no_shortfall[i], " & ",
+      service_counts$shortfall[i], " & ",
+      fmt_pct(service_counts$shortfall_rate[i]),
       " \\\\"
     )
   )
@@ -269,173 +284,88 @@ for (i in seq_len(nrow(counts_100))) {
 
 latex_counts <- c(
   latex_counts,
+  "\\hline",
+  paste0(
+    "Total & ",
+    sum(service_counts$no_shortfall),
+    " & ",
+    sum(service_counts$shortfall),
+    " & ",
+    fmt_pct(mean(runlevel$has_service_shortfall == 1)),
+    " \\\\"
+  ),
   "\\hline\\hline",
-  "\\end{tabular}%",
-  "}",
+  "\\end{tabular}",
   "\\vspace{0.15cm}",
-  "\\begin{minipage}{\\textwidth}",
+  "\\begin{minipage}{0.72\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} No shortfall indicates that the simulation run meets or exceeds the respective service target. Shortfall indicates that average service level falls below the respective target.",
+  "\\textbf{Note.} The service target is 97.5\\%. No shortfall indicates that the simulation run meets or exceeds the target. Shortfall indicates that average service level falls below the target.",
   "\\end{minipage}",
   "\\end{table}"
 )
 
 cat(paste(latex_counts, collapse = "\n"))
+cat("\n\n")
 
-## 15. LaTeX table: first-stage occurrence models -----------------------------
+## 12. LaTeX table: 97.5% two-part model --------------------------------------
 
-occurrence_tabs <- lapply(
-  service_results,
-  function(x) extract_firth(x$occurrence_model)
-)
+occurrence_tab <- extract_firth(model_service_shortfall_occurrence)
+severity_tab <- extract_lmrob(model_service_shortfall_severity)
 
-latex_occurrence <- c(
+latex_twopart <- c(
   "\\begin{table}[!htbp]",
   "\\centering",
   "\\scriptsize",
-  "\\caption{Decision-Making Architecture and Service Shortfall Occurrence}",
-  "\\label{tab:service_shortfall_occurrence}",
+  "\\caption{Decision-Making Architecture and Service Shortfall at the 97.5\\% Target}",
+  "\\label{tab:service_shortfall_twopart_975}",
   "\\resizebox{\\textwidth}{!}{%",
   "\\begin{tabular}{lcccccccc}",
   "\\hline\\hline",
-  " & \\multicolumn{4}{c}{100\\% service target} & \\multicolumn{4}{c}{97.5\\% service target} \\\\",
+  " & \\multicolumn{4}{c}{Shortfall occurrence} & \\multicolumn{4}{c}{Shortfall severity} \\\\",
   "\\cline{2-5} \\cline{6-9}",
-  "Predictors & Est. & SE & $z$ & $p$ & Est. & SE & $z$ & $p$ \\\\",
+  "Predictors & Est. & SE & $z$ & $p$ & Est. & SE & $t$ & $p$ \\\\",
   "\\hline"
 )
 
 for (term in terms) {
-  row_values <- c(labels[term])
-  
-  for (target_name in names(occurrence_tabs)) {
-    tab <- occurrence_tabs[[target_name]]
-    
-    row_values <- c(
-      row_values,
-      fmt_num(get_value(tab, term, "estimate")),
-      fmt_num(get_value(tab, term, "se")),
-      fmt_num(get_value(tab, term, "statistic")),
-      fmt_p(get_value(tab, term, "p"))
+  latex_twopart <- c(
+    latex_twopart,
+    paste0(
+      labels[term], " & ",
+      fmt_num(get_value(occurrence_tab, term, "estimate")), " & ",
+      fmt_num(get_value(occurrence_tab, term, "se")), " & ",
+      fmt_num(get_value(occurrence_tab, term, "statistic")), " & ",
+      fmt_p(get_value(occurrence_tab, term, "p")), " & ",
+      fmt_num(get_value(severity_tab, term, "estimate")), " & ",
+      fmt_num(get_value(severity_tab, term, "se")), " & ",
+      fmt_num(get_value(severity_tab, term, "statistic")), " & ",
+      fmt_p(get_value(severity_tab, term, "p")),
+      " \\\\"
     )
-  }
-  
-  latex_occurrence <- c(
-    latex_occurrence,
-    paste(row_values, collapse = " & "),
-    "\\\\"
   )
 }
 
-latex_occurrence <- c(
-  latex_occurrence,
+latex_twopart <- c(
+  latex_twopart,
   "\\hline",
   paste0(
     "Observations & \\multicolumn{4}{c}{",
-    service_threshold_summary$observations_stage_1[1],
+    nrow(runlevel),
     "} & \\multicolumn{4}{c}{",
-    service_threshold_summary$observations_stage_1[2],
-    "} \\\\"
-  ),
-  paste0(
-    "Target value & \\multicolumn{4}{c}{",
-    sprintf("%.3f", service_threshold_summary$target_value[1]),
-    "} & \\multicolumn{4}{c}{",
-    sprintf("%.3f", service_threshold_summary$target_value[2]),
+    nrow(service_severity_data),
     "} \\\\"
   ),
   paste0(
     "Runs without shortfall & \\multicolumn{4}{c}{",
-    service_threshold_summary$runs_without_shortfall[1],
-    "} & \\multicolumn{4}{c}{",
-    service_threshold_summary$runs_without_shortfall[2],
-    "} \\\\"
-  ),
-  "\\hline\\hline",
-  "\\end{tabular}%",
-  "}",
-  "\\vspace{0.15cm}",
-  "\\begin{minipage}{\\textwidth}",
-  "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $z$ denotes the z-statistic, and $p$ denotes the p-value. The dependent variable equals one if average service level falls below the respective service target. Models are estimated using Firth logistic regression. Positive coefficients indicate a higher probability of service shortfall. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
-  "\\end{minipage}",
-  "\\end{table}"
-)
-
-cat(paste(latex_occurrence, collapse = "\n"))
-
-## 16. LaTeX table: second-stage severity models ------------------------------
-
-severity_tabs <- lapply(
-  service_results,
-  function(x) extract_lmrob(x$severity_model)
-)
-
-latex_severity <- c(
-  "\\begin{table}[!htbp]",
-  "\\centering",
-  "\\scriptsize",
-  "\\caption{Decision-Making Architecture and Service Shortfall Severity}",
-  "\\label{tab:service_shortfall_severity}",
-  "\\resizebox{\\textwidth}{!}{%",
-  "\\begin{tabular}{lcccccccc}",
-  "\\hline\\hline",
-  " & \\multicolumn{4}{c}{100\\% service target} & \\multicolumn{4}{c}{97.5\\% service target} \\\\",
-  "\\cline{2-5} \\cline{6-9}",
-  "Predictors & Est. & SE & $t$ & $p$ & Est. & SE & $t$ & $p$ \\\\",
-  "\\hline"
-)
-
-for (term in terms) {
-  row_values <- c(labels[term])
-  
-  for (target_name in names(severity_tabs)) {
-    tab <- severity_tabs[[target_name]]
-    
-    row_values <- c(
-      row_values,
-      fmt_num(get_value(tab, term, "estimate")),
-      fmt_num(get_value(tab, term, "se")),
-      fmt_num(get_value(tab, term, "statistic")),
-      fmt_p(get_value(tab, term, "p"))
-    )
-  }
-  
-  latex_severity <- c(
-    latex_severity,
-    paste(row_values, collapse = " & "),
-    "\\\\"
-  )
-}
-
-latex_severity <- c(
-  latex_severity,
-  "\\hline",
-  paste0(
-    "Observations & \\multicolumn{4}{c}{",
-    service_threshold_summary$observations_stage_2[1],
-    "} & \\multicolumn{4}{c}{",
-    service_threshold_summary$observations_stage_2[2],
-    "} \\\\"
+    sum(runlevel$has_service_shortfall == 0),
+    "} & \\multicolumn{4}{c}{--} \\\\"
   ),
   paste0(
-    "Target value & \\multicolumn{4}{c}{",
-    sprintf("%.3f", service_threshold_summary$target_value[1]),
-    "} & \\multicolumn{4}{c}{",
-    sprintf("%.3f", service_threshold_summary$target_value[2]),
-    "} \\\\"
-  ),
-  paste0(
-    "$R^2$ / Adjusted $R^2$ & \\multicolumn{4}{c}{",
+    "$R^2$ / Adjusted $R^2$ & \\multicolumn{4}{c}{--} & \\multicolumn{4}{c}{",
     sprintf(
       "%.3f / %.3f",
-      summary(service_results[[1]]$severity_model)$r.squared,
-      summary(service_results[[1]]$severity_model)$adj.r.squared
-    ),
-    "} & \\multicolumn{4}{c}{",
-    sprintf(
-      "%.3f / %.3f",
-      summary(service_results[[2]]$severity_model)$r.squared,
-      summary(service_results[[2]]$severity_model)$adj.r.squared
+      summary(model_service_shortfall_severity)$r.squared,
+      summary(model_service_shortfall_severity)$adj.r.squared
     ),
     "} \\\\"
   ),
@@ -445,9 +375,9 @@ latex_severity <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The dependent variable is the log-transformed service shortfall, conditional on average service level falling below the respective service target. Models are estimated using robust linear regression via \\texttt{lmrob}. Positive coefficients indicate larger service shortfalls. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $z$ denotes the z-statistic, $t$ denotes the t-statistic, and $p$ denotes the p-value. The service target is 97.5\\%. The occurrence model estimates whether average service level falls below the target and is estimated using Firth logistic regression. The severity model estimates the log-transformed service shortfall, conditional on falling below the target, using robust linear regression via \\texttt{lmrob}. Positive coefficients indicate a higher probability of shortfall or larger shortfall severity. Centralized architecture, low demand volatility, and low market noise are omitted reference categories. Rule-based architecture is not estimated in the severity model because no rule-based run falls below the 97.5\\% service target.",
   "\\end{minipage}",
   "\\end{table}"
 )
 
-cat(paste(latex_severity, collapse = "\n"))
+cat(paste(latex_twopart, collapse = "\n"))
