@@ -1,4 +1,5 @@
 ## Appendix A2: Run-Level Robust Profit Model ---------------------------------
+## Reference category: rule-based architecture
 
 ## 1. Packages ----------------------------------------------------------------
 library(readxl)
@@ -23,7 +24,8 @@ runlevel$architecture <- factor(runlevel$architecture)
 runlevel$demand_volatility <- factor(runlevel$demand_volatility)
 runlevel$market_noise <- factor(runlevel$market_noise)
 
-runlevel$architecture <- relevel(runlevel$architecture, ref = "centralized")
+## Main change: rule-based architecture is now the omitted reference category
+runlevel$architecture <- relevel(runlevel$architecture, ref = "rule_based")
 runlevel$demand_volatility <- relevel(runlevel$demand_volatility, ref = "0.1")
 runlevel$market_noise <- relevel(runlevel$market_noise, ref = "0.03")
 
@@ -53,11 +55,14 @@ axis(
 )
 
 ## 5. Robust run-level models -------------------------------------------------
+
+## Model 1: architecture only
 model_profit_robust_1 <- lmrob(
   total_profit_mio ~ architecture,
   data = runlevel
 )
 
+## Model 2: architecture plus controls
 model_profit_robust_2 <- lmrob(
   total_profit_mio ~ architecture + demand_volatility + market_noise,
   data = runlevel
@@ -102,8 +107,8 @@ tab_model(
   ),
   pred.labels = c(
     "Constant",
+    "Centralized architecture",
     "Independent architecture",
-    "Rule-based architecture",
     "Sequential architecture",
     "Supervised architecture",
     "High demand volatility",
@@ -130,7 +135,7 @@ extract_lmrob <- function(model) {
   coefs <- as.data.frame(summary(model)$coefficients)
   coefs$term <- rownames(coefs)
   rownames(coefs) <- NULL
-
+  
   data.frame(
     term = coefs$term,
     estimate = fmt_num(coefs$Estimate),
@@ -154,8 +159,8 @@ model_2_tab <- extract_lmrob(model_profit_robust_2)
 
 labels <- c(
   "(Intercept)" = "Intercept",
+  "architecturecentralized" = "Centralized architecture",
   "architectureindependent" = "Independent architecture",
-  "architecturerule_based" = "Rule-based architecture",
   "architecturesequential" = "Sequential architecture",
   "architecturesupervised" = "Supervised architecture",
   "demand_volatility0.25" = "High demand volatility",
@@ -230,7 +235,7 @@ latex_model <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The analysis is conducted at the simulation-run level. The dependent variable is total profit measured in million euros. Models are estimated using robust linear regression via \\texttt{lmrob}. Decision-making architecture is dummy-coded, with centralized architecture as the omitted reference category. Low demand volatility (0.1) and low market noise (0.03) are omitted reference categories for the controls.",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The analysis is conducted at the simulation-run level. The dependent variable is total profit measured in million euros. Models are estimated using robust linear regression via \\texttt{lmrob}. Decision-making architecture is dummy-coded, with rule-based architecture as the omitted reference category. Low demand volatility (0.1) and low market noise (0.03) are omitted reference categories for the controls. Positive architecture coefficients indicate higher average total profit relative to rule-based architecture.",
   "\\end{minipage}",
   "\\end{table}"
 )
@@ -246,8 +251,8 @@ x_matrix <- model.matrix(
 x_matrix <- x_matrix[, colnames(x_matrix) != "(Intercept)"]
 
 clean_names <- c(
+  "Centralized architecture",
   "Independent architecture",
-  "Rule-based architecture",
   "Sequential architecture",
   "Supervised architecture",
   "High demand volatility",
@@ -294,7 +299,7 @@ latex_cor <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} The correlation matrix is based on the dummy-coded predictors used in the final robust regression model. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\textbf{Note.} The correlation matrix is based on the dummy-coded predictors used in the final robust regression model. Rule-based architecture, low demand volatility, and low market noise are omitted reference categories.",
   "\\end{minipage}",
   "\\end{table}"
 )
@@ -336,7 +341,7 @@ pairwise_results <- data.frame()
 for (i in 1:(nrow(X_arch) - 1)) {
   for (j in (i + 1):nrow(X_arch)) {
     contrast_vec <- X_arch[i, ] - X_arch[j, ]
-
+    
     estimate <- as.numeric(contrast_vec %*% b)
     se <- sqrt(as.numeric(contrast_vec %*% V %*% contrast_vec))
     t_value <- estimate / se
@@ -345,10 +350,12 @@ for (i in 1:(nrow(X_arch) - 1)) {
       df = model_profit_robust_2$df.residual,
       lower.tail = FALSE
     )
-
+    
     pairwise_results <- rbind(
       pairwise_results,
       data.frame(
+        architecture_1 = arch_levels[i],
+        architecture_2 = arch_levels[j],
         contrast = paste(arch_levels[i], "-", arch_levels[j]),
         estimate = estimate,
         se = se,
@@ -364,22 +371,105 @@ pairwise_results$p_holm <- p.adjust(pairwise_results$p, method = "holm")
 pairwise_results
 pairwise_results[order(pairwise_results$p_holm), ]
 
-## 12. Pairwise contrast LaTeX table ------------------------------------------
-contrast_labels <- c(
-  "centralized - independent" = "Centralized -- Independent",
-  "centralized - rule_based" = "Centralized -- Rule-based",
-  "centralized - sequential" = "Centralized -- Sequential",
-  "centralized - supervised" = "Centralized -- Supervised",
-  "independent - rule_based" = "Independent -- Rule-based",
-  "independent - sequential" = "Independent -- Sequential",
-  "independent - supervised" = "Independent -- Supervised",
-  "rule_based - sequential" = "Rule-based -- Sequential",
-  "rule_based - supervised" = "Rule-based -- Supervised",
-  "sequential - supervised" = "Sequential -- Supervised"
+## 12. Direct contrasts relative to rule-based architecture --------------------
+rule_based_contrasts <- subset(
+  pairwise_results,
+  architecture_1 == "rule_based" | architecture_2 == "rule_based"
 )
 
+## Convert contrasts so they read as: comparison architecture minus rule-based
+rule_based_contrasts$comparison_architecture <- ifelse(
+  rule_based_contrasts$architecture_1 == "rule_based",
+  rule_based_contrasts$architecture_2,
+  rule_based_contrasts$architecture_1
+)
+
+rule_based_contrasts$estimate_vs_rule_based <- ifelse(
+  rule_based_contrasts$architecture_1 == "rule_based",
+  -rule_based_contrasts$estimate,
+  rule_based_contrasts$estimate
+)
+
+rule_based_contrasts$contrast_label <- c(
+  "Centralized -- Rule-based",
+  "Independent -- Rule-based",
+  "Sequential -- Rule-based",
+  "Supervised -- Rule-based"
+)[match(
+  rule_based_contrasts$comparison_architecture,
+  c("centralized", "independent", "sequential", "supervised")
+)]
+
+rule_based_contrasts <- rule_based_contrasts[
+  match(
+    c("centralized", "independent", "sequential", "supervised"),
+    rule_based_contrasts$comparison_architecture
+  ),
+]
+
+rule_based_contrasts
+
+latex_rule_based <- c(
+  "\\begin{table}[!htbp]",
+  "\\centering",
+  "\\scriptsize",
+  "\\caption{Architecture Contrasts Relative to Rule-Based Architecture}",
+  "\\label{tab:rule_based_architecture_contrasts}",
+  "\\begin{tabular}{lrrrrr}",
+  "\\hline\\hline",
+  "Contrast & Est. & SE & $t$ & $p$ & Holm-adjusted $p$ \\\\",
+  "\\hline"
+)
+
+for (i in seq_len(nrow(rule_based_contrasts))) {
+  latex_rule_based <- c(
+    latex_rule_based,
+    paste0(
+      rule_based_contrasts$contrast_label[i], " & ",
+      fmt_num(rule_based_contrasts$estimate_vs_rule_based[i]), " & ",
+      fmt_num(rule_based_contrasts$se[i]), " & ",
+      fmt_num(rule_based_contrasts$estimate_vs_rule_based[i] / rule_based_contrasts$se[i]), " & ",
+      fmt_p(rule_based_contrasts$p[i]), " & ",
+      fmt_p(rule_based_contrasts$p_holm[i]),
+      " \\\\"
+    )
+  )
+}
+
+latex_rule_based <- c(
+  latex_rule_based,
+  "\\hline\\hline",
+  "\\end{tabular}",
+  "\\vspace{0.15cm}",
+  "\\begin{minipage}{0.90\\textwidth}",
+  "\\footnotesize",
+  "\\textbf{Note.} Pairwise contrasts are computed from the final robust regression model with demand volatility and market noise controls. Estimates indicate differences in average total profit measured in million euros. Positive estimates indicate that the comparison architecture has higher average total profit than rule-based architecture. Holm-adjusted $p$-values account for multiple comparisons across architecture contrasts.",
+  "\\end{minipage}",
+  "\\end{table}"
+)
+
+cat("\n\n")
+cat(paste(latex_rule_based, collapse = "\n"))
+
+## 13. Full pairwise contrast LaTeX table -------------------------------------
+
+architecture_name <- function(x) {
+  out <- c(
+    "centralized" = "Centralized",
+    "independent" = "Independent",
+    "rule_based" = "Rule-based",
+    "sequential" = "Sequential",
+    "supervised" = "Supervised"
+  )
+  unname(out[x])
+}
+
 pairwise_table <- pairwise_results
-pairwise_table$contrast_label <- contrast_labels[pairwise_table$contrast]
+pairwise_table$contrast_label <- paste0(
+  architecture_name(pairwise_table$architecture_1),
+  " -- ",
+  architecture_name(pairwise_table$architecture_2)
+)
 
 latex_pairwise <- c(
   "\\begin{table}[!htbp]",
@@ -422,4 +512,3 @@ latex_pairwise <- c(
 
 cat("\n\n")
 cat(paste(latex_pairwise, collapse = "\n"))
-
