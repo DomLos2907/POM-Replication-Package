@@ -1,4 +1,5 @@
 ## Service Quality Models: Average Service Level and 97.5% Shortfall -----------
+## Reference category: rule-based architecture
 
 ## 1. Packages ----------------------------------------------------------------
 library(readxl)
@@ -6,7 +7,14 @@ library(logistf)
 library(robustbase)
 
 ## 2. Import run-level data ---------------------------------------------------
-runlevel <- read_excel("C:/Users/loske/Desktop/POM_RunLevel_Dataset.xlsx")
+project_data_path <- "data/raw/POM_RunLevel_Dataset.xlsx"
+desktop_data_path <- "C:/Users/loske/Desktop/POM_RunLevel_Dataset.xlsx"
+
+if (file.exists(project_data_path)) {
+  runlevel <- read_excel(project_data_path)
+} else {
+  runlevel <- read_excel(desktop_data_path)
+}
 
 ## 3. Variable preparation ----------------------------------------------------
 runlevel$avg_service_level <- as.numeric(runlevel$avg_service_level)
@@ -20,7 +28,8 @@ runlevel$architecture <- factor(runlevel$architecture)
 runlevel$demand_volatility <- factor(runlevel$demand_volatility)
 runlevel$market_noise <- factor(runlevel$market_noise)
 
-runlevel$architecture <- relevel(runlevel$architecture, ref = "centralized")
+## Main change: rule-based architecture is now the omitted reference category
+runlevel$architecture <- relevel(runlevel$architecture, ref = "rule_based")
 runlevel$demand_volatility <- relevel(runlevel$demand_volatility, ref = "0.1")
 runlevel$market_noise <- relevel(runlevel$market_noise, ref = "0.03")
 
@@ -180,8 +189,8 @@ extract_lmrob <- function(model) {
 
 labels <- c(
   "(Intercept)" = "Intercept",
+  "architecturecentralized" = "Centralized architecture",
   "architectureindependent" = "Independent architecture",
-  "architecturerule_based" = "Rule-based architecture",
   "architecturesequential" = "Sequential architecture",
   "architecturesupervised" = "Supervised architecture",
   "demand_volatility0.25" = "High demand volatility",
@@ -237,7 +246,7 @@ latex_service_avg <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{0.82\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The dependent variable is average service level. The model is estimated as a fractional logit model using a quasibinomial logit link. Centralized architecture, low demand volatility, and low market noise are omitted reference categories.",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $t$ denotes the t-statistic, and $p$ denotes the p-value. The dependent variable is average service level. The model is estimated as a fractional logit model using a quasibinomial logit link. Rule-based architecture, low demand volatility, and low market noise are omitted reference categories. Negative architecture coefficients indicate lower average service level relative to rule-based architecture.",
   "\\end{minipage}",
   "\\end{table}"
 )
@@ -248,9 +257,9 @@ cat("\n\n")
 ## 11. LaTeX table: 97.5% shortfall counts ------------------------------------
 
 architecture_labels <- c(
+  "rule_based" = "Rule-based",
   "centralized" = "Centralized",
   "independent" = "Independent",
-  "rule_based" = "Rule-based",
   "sequential" = "Sequential",
   "supervised" = "Supervised"
 )
@@ -375,7 +384,7 @@ latex_twopart <- c(
   "\\vspace{0.15cm}",
   "\\begin{minipage}{\\textwidth}",
   "\\footnotesize",
-  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $z$ denotes the z-statistic, $t$ denotes the t-statistic, and $p$ denotes the p-value. The service target is 97.5\\%. The occurrence model estimates whether average service level falls below the target and is estimated using Firth logistic regression. The severity model estimates the log-transformed service shortfall, conditional on falling below the target, using robust linear regression via \\texttt{lmrob}. Positive coefficients indicate a higher probability of shortfall or larger shortfall severity. Centralized architecture, low demand volatility, and low market noise are omitted reference categories. Rule-based architecture is not estimated in the severity model because no rule-based run falls below the 97.5\\% service target.",
+  "\\textbf{Note.} Est. denotes the coefficient estimate, SE denotes the standard error, $z$ denotes the z-statistic, $t$ denotes the t-statistic, and $p$ denotes the p-value. The service target is 97.5\\%. The occurrence model estimates whether average service level falls below the target and is estimated using Firth logistic regression. The severity model estimates the log-transformed service shortfall, conditional on falling below the target, using robust linear regression via \\texttt{lmrob}. Positive coefficients indicate a higher probability of shortfall or larger shortfall severity relative to rule-based architecture. Rule-based architecture, low demand volatility, and low market noise are omitted reference categories. Rule-based architecture is not estimated in the severity model because no rule-based run falls below the 97.5\\% service target.",
   "\\end{minipage}",
   "\\end{table}"
 )
